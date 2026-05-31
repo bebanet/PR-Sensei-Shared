@@ -1,7 +1,13 @@
 # PR-Sensei-Shared
 
-Shared contract for the PrintedReef ecosystem. Two headers that every
-firmware repo must agree on byte-for-byte.
+The **single source of truth** for the PrintedReef ecosystem — the data
+contract every firmware repo must agree on byte-for-byte, and (increasingly)
+the device-independent logic and UI widgets they share.
+
+> **Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first.** It is the canonical
+> "one brain, many faces" model, the pinned platform (native ESP-IDF, LVGL
+> version), the component layout, the consumption recipe, and the brand /
+> transport rules every repo follows.
 
 ## Contents
 
@@ -10,6 +16,12 @@ firmware repo must agree on byte-for-byte.
 - `include/pr_espnow_wire.h` — the ESP-NOW wire format. The packed,
   <=250-byte binary encoding of a `DeviceState` for peer-to-peer
   transmission. Includes `schema.h`.
+- `components/` — the shared core as ESP-IDF components:
+  - `pr_contract` — the two headers above, exposed as a `REQUIRES`-able
+    component (live now).
+  - `pr_data` · `pr_ui` · `pr_sim` — device-independent state/logic, reusable
+    LVGL widgets, and the demo simulator. Being lifted from
+    `PR-Desktop-Display-P4`; see each README and `ARCHITECTURE.md` §6.
 
 ## How it's used
 
