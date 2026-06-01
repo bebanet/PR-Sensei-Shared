@@ -1,0 +1,5 @@
+version: "1.0.0"
+description: "PrintedReef shared LVGL widgets + theme (arc gauge, palette, styles)"
+dependencies:
+  idf: ">=5.3.0"
+  lvgl/lvgl: "~9.5.0"
