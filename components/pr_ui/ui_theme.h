@@ -42,8 +42,13 @@ extern lv_style_t pr_st_screen;   /* root screen                            */
 extern lv_style_t pr_st_card;     /* hero card / tile surface               */
 extern lv_style_t pr_st_well;     /* recessed inner panel (chem cell, spark) */
 extern lv_style_t pr_st_topbar;   /* top bar                                */
+extern lv_style_t pr_st_press;    /* pressed-state feedback (teal tint+shrink)*/
 
 void pr_theme_init(void);
+
+/* Give a clickable object tap feedback: teal tint + slight shrink while held.
+   Call after marking the object CLICKABLE. Safe on any widget. */
+void pr_press_fx(lv_obj_t *obj);
 
 /* ---- fonts -------------------------------------------------------------- */
 #ifndef PR_FONT_HERO
