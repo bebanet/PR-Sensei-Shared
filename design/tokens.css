@@ -1,0 +1,23 @@
+/* AUTO-GENERATED from tokens.json by generate-tokens.mjs. Do not edit. */
+:root {
+  --accent: #2DC6DE;
+  --violet: #A78BFA;
+  --status-ok: #2DC6DE;
+  --status-warn: #E8A93C;
+  --status-error: #E25646;
+  --status-info: #60A5FA;
+  --status-pause: #A78BFA;
+  --text: #FFFFFF;
+  --text-muted: #A7AFBA;
+  --text-dim: #6B7A86;
+  --bg: linear-gradient(160deg, #1B3687, #0D1F4F, #081436);
+  --card: rgba(45,198,222,0.06);
+  --border: rgba(45,198,222,0.14);
+}
+:root[data-theme="light"] {
+  --bg: #F4F5FB;
+  --sheet-bg: #FFFFFF;
+  --accent: #1B3687;
+  --text: #0D1F4F;
+  --status-error: #C23030;
+}

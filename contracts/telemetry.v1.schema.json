@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/bebanet/aquasensei-shared/blob/main/contracts/telemetry.v1.schema.json",
+  "title": "AquaSensei Telemetry v1",
+  "description": "Canonical device-to-cloud telemetry contract for the AquaSensei platform. Units are baked into the key names (temp_f, alk_dkh, ...) so there is no ambiguity. Known parameters and source types are enumerated to catch drift: to add a parameter or a source shape, add it here and bump the contract version. Firmware serializes to this; the app validates every inbound MQTT payload against it at the ingest boundary and rejects anything off-contract.",
+  "type": "object",
+  "required": ["schema", "client_id", "device_type", "ts", "sources"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "as.telemetry.v1",
+      "description": "Contract version tag. The app routes by this value."
+    },
+    "client_id": {
+      "type": "string",
+      "pattern": "^pr-[0-9a-f]{12}$",
+      "description": "Device MQTT clientId: 'pr-' + lowercase STA MAC, no colons."
+    },
+    "device_type": {
+      "type": "string",
+      "description": "Device model. Free string so adding a new device of an existing shape does not bump the contract. Known values: trident, desktop7, roller_mat, monitor."
+    },
+    "ts": {
+      "type": "integer",
+      "description": "Unix epoch seconds from the device clock (NTP-synced)."
+    },
+    "fw_version": {
+      "type": "string",
+      "description": "Reporting firmware version."
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "description": "One entry per data source the device carries. Single-source devices (Trident) send one entry; aggregators (desktop7) send several.",
+      "items": { "$ref": "#/definitions/source" }
+    }
+  },
+  "definitions": {
+    "source": {
+      "type": "object",
+      "required": ["source_id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "description": "Stable source identity, e.g. 'apex:<serial>:tank', 'apex:<serial>:trident', 'apex:trident'."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["tank_probes", "trident", "outlets", "feed"],
+          "description": "Source shape. Adding a new shape is a contract change: add it here and bump the version."
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["live", "sim"],
+          "default": "live",
+          "description": "Demo/simulator sources MUST be tagged 'sim'. The cloud rejects sim telemetry; it must never be ingested as real."
+        },
+        "readings": { "$ref": "#/definitions/readings" },
+        "outlets": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/outlet" }
+        },
+        "feed": { "$ref": "#/definitions/feed" },
+        "meta": {
+          "type": "object",
+          "description": "Source-specific extras, e.g. Trident status/error_code/reagent_ml/last_cal_days.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "readings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Known parameters only, units in the key. Omit a key rather than sending a zero/placeholder. To add a parameter, add it here and bump the version.",
+      "properties": {
+        "temp_f": { "type": "number" },
+        "ph": { "type": "number" },
+        "orp_mv": { "type": "number" },
+        "salinity_ppt": { "type": "number" },
+        "alk_dkh": { "type": "number" },
+        "ca_ppm": { "type": "number" },
+        "mg_ppm": { "type": "number" },
+        "no3_ppm": { "type": "number" },
+        "po4_ppm": { "type": "number" }
+      }
+    },
+    "outlet": {
+      "type": "object",
+      "required": ["name", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "state": {
+          "type": "string",
+          "enum": ["ON", "OFF", "AON", "AOF", "PROFILE"],
+          "description": "Decoded Apex outlet state (auto-on/auto-off/profile preserved)."
+        }
+      }
+    },
+    "feed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "active": { "type": "boolean" },
+        "cycle": {
+          "type": ["string", "null"],
+          "description": "Active feed cycle (A-D) or null."
+        }
+      }
+    }
+  }
+}
