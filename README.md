@@ -1,53 +1,48 @@
-# PR-Sensei-Shared
+# aquasensei-shared
 
-The **single source of truth** for the PrintedReef ecosystem — the data
-contract every firmware repo must agree on byte-for-byte, and (increasingly)
-the device-independent logic and UI widgets they share.
+The single source of truth for the AquaSensei platform. Every device firmware and the app conform to what is defined here. If a fact about the contract or the design system lives anywhere else, it is a copy and it will drift. It lives here.
 
-> **Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first.** It is the canonical
-> "one brain, many faces" model, the pinned platform (native ESP-IDF, LVGL
-> version), the component layout, the consumption recipe, and the brand /
-> transport rules every repo follows.
+## What is in here
 
-## Contents
+```
+contracts/                  the language-neutral platform contract
+  telemetry.v1.schema.json  device-to-cloud payload (machine-checkable, authoritative)
+  telemetry.v1.md           human spec + examples for the above
+  mqtt-topics.md            topic structure, QoS, cadence, broker
+  registration.v1.md        claim-code / device-to-account binding flow
+  CHANGELOG.md              contract version history
 
-- `include/schema.h` — the unified device data model (`DeviceState`).
-  How a device's data lives in memory on a display.
-- `include/pr_espnow_wire.h` — the ESP-NOW wire format. The packed,
-  <=250-byte binary encoding of a `DeviceState` for peer-to-peer
-  transmission. Includes `schema.h`.
-- `components/` — the shared core as ESP-IDF components:
-  - `pr_contract` — the two headers above, exposed as a `REQUIRES`-able
-    component (live now).
-  - `pr_data` · `pr_ui` · `pr_sim` — device-independent state/logic, reusable
-    LVGL widgets, and the demo simulator. Being lifted from
-    `PR-Desktop-Display-P4`; see each README and `ARCHITECTURE.md` §6.
+design/                     the design system
+  tokens.json               colors + type (edit THIS)
+  generate-tokens.mjs        emits tokens.h and tokens.css from tokens.json
+  tokens.h                  GENERATED: firmware / LVGL color defines
+  tokens.css               GENERATED: app CSS variables
 
-## How it's used
+schema/                     the C side (compiled into firmware via submodule)
+  include/schema.h          DeviceState + enums
+  pr_espnow_wire.h          ESP-NOW binary wire
+```
 
-Consumed as a **git submodule**, never copied. Repos that depend on it:
+## Two kinds of shared, two forms
 
-- `PR-Roller-Mat-Filter` — encodes telemetry (`pr_wire_encode_telemetry`)
-- `printedreef-display` — decodes telemetry (`pr_wire_decode_telemetry`)
-- future first-party device and display repos
+- **Code** (`schema/`): C headers, compiled into firmware via git submodule. The Node app cannot use these.
+- **Contract** (`contracts/`, `design/`): language-neutral, because both the C firmware and the JS app implement it. The JSON Schema and the generated CSS/header are the bridge across the C/JS boundary.
 
-Add to a consuming repo:
+## The token generator
 
-    git submodule add https://github.com/bebanet/PR-Sensei-Shared.git lib/PR-Sensei-Shared
+`design/tokens.json` is the only file anyone edits. Run the generator to produce the consumable outputs:
 
-Include path: `#include "PR-Sensei-Shared/include/schema.h"`
+```
+node design/generate-tokens.mjs
+```
 
-## Changing these files
+This writes `design/tokens.h` (firmware) and `design/tokens.css` (app). The generated files are committed so consumers can use them directly. Never hand-edit `tokens.h` or `tokens.css`. Change a color in `tokens.json`, regenerate, commit.
 
-These are a **contract**. A change here ripples to every device.
+## How consumers use this
 
-- `schema.h` is locked at schema version 1. Any field change bumps
-  `PR_SCHEMA_VERSION`; the wire format's version checks depend on it.
-- Changing the wire layout bumps `PR_WIRE_VERSION`.
-- After any change, each consuming repo must update its submodule
-  pointer deliberately and be recompiled — pin versions, don't drift.
+- **Firmware** (Trident, View 7 / P4, roller mat): add this repo as a git submodule, `#include` `design/tokens.h`, and serialize telemetry to `contracts/telemetry.v1.schema.json`. Replace local color `#define`s with the `AS_COL_*` names.
+- **App**: consume `contracts/telemetry.v1.schema.json` and validate every inbound MQTT payload against it at the ingest boundary (reject off-contract messages, do not write them to `readings`). Import `design/tokens.css` into the theme.
 
-## Versioning
+## Versioning rule
 
-Tag releases (`v1.0.0`, ...). Consumers pin to a tag so a contract
-change is an explicit, reviewed submodule bump, never a silent one.
+The contract is versioned (`as.telemetry.v1`). The data shape is what the version tracks, not the device roster. Adding a new device of an existing shape does not bump anything. Adding a parameter or a new source shape is a contract change: update the schema, bump the version, add a CHANGELOG entry, and support both versions during migration. Devices declare their version in the `schema` field; the app routes and validates by it.
