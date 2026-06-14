@@ -8,3 +8,7 @@ All changes to the platform contract (telemetry schema, topics, registration) ar
 - MQTT topics: `as/v1/{account}/{display}/{telemetry|state|status|cmd}`, TLS 8883, QoS 1.
 - Registration v1: claim-code device-to-account binding.
 - Design tokens 1.0.0: unified palette (cyan nominal, no green), device near-black + app navy surfaces, per-platform type.
+## 1.1.0
+- Added state.v1 downlink contract (retained full-snapshot overlay, optional delta channel reserved).
+- Documented device data/command-only scope and the no-media-on-device rule.
+- Added `vision` source type to telemetry for future camera-equipped devices.
