@@ -6,36 +6,37 @@
  */
 #pragma once
 #include "lvgl.h"
+#include "../../design/tokens.h"   /* shared AS_COL_* design tokens (tokens.json) */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ---- palette — IPS tuning ----------------------------------------------
- * The desktop unit is an IPS panel, not OLED. The OLED palette (kept below
- * for reference) reads washed-out on IPS. The round 1.75" AMOLED sibling
- * should define its own OLED-tuned palette variant.
+/* ---- palette — sourced from the shared design tokens -------------------
+ * Local PR_* NAMES are unchanged so no call site needs editing; each VALUE now
+ * aliases an AS_COL_* token from design/tokens.h — the single source of truth,
+ * generated from tokens.json. Mapping is by meaning.
  *
- * Status colours are FUNCTIONAL, not the brand palette: teal = in-range,
- * amber = attention, red = alert. Cyan is a neutral accent only. Never green.
+ * Status colours stay FUNCTIONAL, not brand: teal = in-range, amber =
+ * attention, red = alert. Cyan is a neutral accent only. Never green.
  *
- * OLED reference (do not use on the IPS panel):
- *   teal 0x2BB6A3 · amber 0xE8A93C · red 0xE25646 · cyan 0x4FC3D9
- *   ink 0xF2F2F2 · grey 0x8A9099 · dim 0x646B74 · line 0x243039
- *   bg 0x0C1116 · panel 0x141B23 · well 0x10161C · topbar 0x0D141A
+ * NOTE: the shared tokens are the platform baseline, NOT the old IPS-specific
+ * tuning. The on-IPS colours shift slightly toward the shared palette. If the
+ * IPS panel needs brighter values again, override individual PR_* AFTER this
+ * block rather than re-hardcoding hexes.
  */
-#define PR_TEAL    lv_color_hex(0x36D6C2)   /* in-range / nominal       */
-#define PR_AMBER   lv_color_hex(0xFFB83D)   /* attention                */
-#define PR_RED     lv_color_hex(0xFF6454)   /* alert                    */
-#define PR_CYAN    lv_color_hex(0x55D8F0)   /* neutral accent ONLY      */
-#define PR_INK     lv_color_hex(0xFFFFFF)   /* primary text             */
-#define PR_GREY    lv_color_hex(0xA7AFBA)   /* secondary text / labels  */
-#define PR_DIM     lv_color_hex(0x8B95A1)   /* faint labels             */
-#define PR_LINE    lv_color_hex(0x31404C)   /* dividers, tile borders   */
-#define PR_BG      lv_color_hex(0x101820)   /* screen background        */
-#define PR_PANEL   lv_color_hex(0x18232D)   /* hero card / tile surface */
-#define PR_WELL    lv_color_hex(0x121D26)   /* recessed inner panels    */
-#define PR_TOPBAR  lv_color_hex(0x131E28)   /* top bar background       */
+#define PR_TEAL    lv_color_hex(0x36D6C2)        /* in-range/nominal — KEPT LOCAL: AS_COL_OK==AS_COL_ACCENT would merge teal into PR_CYAN */
+#define PR_AMBER   lv_color_hex(AS_COL_WARN)     /* attention                */
+#define PR_RED     lv_color_hex(AS_COL_ERROR)    /* alert                    */
+#define PR_CYAN    lv_color_hex(AS_COL_ACCENT)   /* neutral accent ONLY      */
+#define PR_INK     lv_color_hex(AS_COL_TEXT)     /* primary text             */
+#define PR_GREY    lv_color_hex(AS_COL_MUTED)    /* secondary text / labels  */
+#define PR_DIM     lv_color_hex(AS_COL_DIM)      /* faint labels             */
+#define PR_LINE    lv_color_hex(AS_COL_TRACK)    /* dividers, tile borders, gauge track */
+#define PR_BG      lv_color_hex(AS_COL_BG)       /* screen background        */
+#define PR_PANEL   lv_color_hex(AS_COL_CARD)     /* hero card / tile surface */
+#define PR_WELL    lv_color_hex(AS_COL_WELL)     /* recessed inner panels    */
+#define PR_TOPBAR  lv_color_hex(AS_COL_TOPBAR)   /* top bar background       */
 
 /* ---- shared styles — initialised once by pr_theme_init() ---------------- */
 extern lv_style_t pr_st_screen;   /* root screen                            */
