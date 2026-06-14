@@ -5,6 +5,7 @@ lv_style_t pr_st_screen;
 lv_style_t pr_st_card;
 lv_style_t pr_st_well;
 lv_style_t pr_st_topbar;
+lv_style_t pr_st_press;
 
 void pr_theme_init(void)
 {
@@ -42,4 +43,20 @@ void pr_theme_init(void)
     lv_style_set_border_side(&pr_st_topbar, LV_BORDER_SIDE_BOTTOM);
     lv_style_set_border_color(&pr_st_topbar, PR_LINE);
     lv_style_set_border_width(&pr_st_topbar, 1);
+
+    /* pressed-state feedback — teal tint + a small shrink so any tap is
+       visibly acknowledged. Applied per-object via pr_press_fx() at
+       LV_STATE_PRESSED, so it only ever shows on clickable widgets. */
+    lv_style_init(&pr_st_press);
+    lv_style_set_bg_color(&pr_st_press, PR_TEAL);
+    lv_style_set_bg_opa(&pr_st_press, LV_OPA_40);
+    lv_style_set_border_color(&pr_st_press, PR_TEAL);
+    lv_style_set_border_opa(&pr_st_press, LV_OPA_COVER);
+    lv_style_set_transform_width(&pr_st_press, -3);
+    lv_style_set_transform_height(&pr_st_press, -3);
+}
+
+void pr_press_fx(lv_obj_t *obj)
+{
+    if (obj) lv_obj_add_style(obj, &pr_st_press, LV_STATE_PRESSED);
 }
