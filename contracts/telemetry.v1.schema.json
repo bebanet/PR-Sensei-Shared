@@ -7,33 +7,12 @@
   "required": ["schema", "client_id", "device_type", "ts", "sources"],
   "additionalProperties": false,
   "properties": {
-    "schema": {
-      "const": "as.telemetry.v1",
-      "description": "Contract version tag. The app routes by this value."
-    },
-    "client_id": {
-      "type": "string",
-      "pattern": "^pr-[0-9a-f]{12}$",
-      "description": "Device MQTT clientId: 'pr-' + lowercase STA MAC, no colons."
-    },
-    "device_type": {
-      "type": "string",
-      "description": "Device model. Free string so adding a new device of an existing shape does not bump the contract. Known values: trident, desktop7, roller_mat, monitor."
-    },
-    "ts": {
-      "type": "integer",
-      "description": "Unix epoch seconds from the device clock (NTP-synced)."
-    },
-    "fw_version": {
-      "type": "string",
-      "description": "Reporting firmware version."
-    },
-    "sources": {
-      "type": "array",
-      "minItems": 1,
-      "description": "One entry per data source the device carries. Single-source devices (Trident) send one entry; aggregators (desktop7) send several.",
-      "items": { "$ref": "#/definitions/source" }
-    }
+    "schema": { "const": "as.telemetry.v1", "description": "Contract version tag. The app routes by this value." },
+    "client_id": { "type": "string", "pattern": "^pr-[0-9a-f]{12}$", "description": "Device MQTT clientId: 'pr-' + lowercase STA MAC, no colons." },
+    "device_type": { "type": "string", "description": "Device model. Free string so adding a new device of an existing shape does not bump the contract. Known values: trident, desktop7, roller_mat, monitor, cam." },
+    "ts": { "type": "integer", "description": "Unix epoch seconds, device clock (NTP-synced)." },
+    "fw_version": { "type": "string", "description": "Reporting firmware version." },
+    "sources": { "type": "array", "minItems": 1, "description": "One entry per data source the device carries. Single-source devices send one entry; aggregators send several.", "items": { "$ref": "#/definitions/source" } }
   },
   "definitions": {
     "source": {
@@ -41,32 +20,14 @@
       "required": ["source_id", "type"],
       "additionalProperties": false,
       "properties": {
-        "source_id": {
-          "type": "string",
-          "description": "Stable source identity, e.g. 'apex:<serial>:tank', 'apex:<serial>:trident', 'apex:trident'."
-        },
-        "type": {
-          "type": "string",
-          "enum": ["tank_probes", "trident", "outlets", "feed"],
-          "description": "Source shape. Adding a new shape is a contract change: add it here and bump the version."
-        },
-        "origin": {
-          "type": "string",
-          "enum": ["live", "sim"],
-          "default": "live",
-          "description": "Demo/simulator sources MUST be tagged 'sim'. The cloud rejects sim telemetry; it must never be ingested as real."
-        },
+        "source_id": { "type": "string", "description": "Stable source identity, e.g. 'apex:<serial>:tank', 'apex:trident', 'cam:tank-front'." },
+        "type": { "type": "string", "enum": ["tank_probes", "trident", "outlets", "feed", "vision"], "description": "Source shape. Adding a new shape is a contract change: add it here and bump the version. 'vision' is for a future camera-equipped device that publishes observations on the uplink; app-side vision is internal and does not use this path." },
+        "origin": { "type": "string", "enum": ["live", "sim"], "default": "live", "description": "Demo / simulator sources MUST be tagged 'sim'. The cloud rejects sim telemetry so it can never be ingested as real." },
         "readings": { "$ref": "#/definitions/readings" },
-        "outlets": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/outlet" }
-        },
+        "outlets": { "type": "array", "items": { "$ref": "#/definitions/outlet" } },
         "feed": { "$ref": "#/definitions/feed" },
-        "meta": {
-          "type": "object",
-          "description": "Source-specific extras, e.g. Trident status/error_code/reagent_ml/last_cal_days.",
-          "additionalProperties": true
-        }
+        "observations": { "type": "array", "description": "Vision findings (device-side vision only). Small key/value observations, never the image. If a finding references a frame, it references app-side storage, never the bytes.", "items": { "$ref": "#/definitions/observation" } },
+        "meta": { "type": "object", "description": "Source-specific extras, e.g. Trident status/error_code/reagent_ml/last_cal_days.", "additionalProperties": true }
       }
     },
     "readings": {
@@ -91,11 +52,7 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string" },
-        "state": {
-          "type": "string",
-          "enum": ["ON", "OFF", "AON", "AOF", "PROFILE"],
-          "description": "Decoded Apex outlet state (auto-on/auto-off/profile preserved)."
-        }
+        "state": { "type": "string", "enum": ["ON", "OFF", "AON", "AOF", "PROFILE"], "description": "Decoded Apex outlet state (auto-on/auto-off/profile preserved)." }
       }
     },
     "feed": {
@@ -103,10 +60,17 @@
       "additionalProperties": false,
       "properties": {
         "active": { "type": "boolean" },
-        "cycle": {
-          "type": ["string", "null"],
-          "description": "Active feed cycle (A-D) or null."
-        }
+        "cycle": { "type": ["string", "null"], "description": "Active feed cycle (A-D) or null." }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "required": ["key", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "description": "Observation name, e.g. skimmer_cup_fullness_pct, water_level, coral_color_shift." },
+        "value": { "type": ["number", "string", "boolean"], "description": "The observed value." },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Model confidence 0 to 1, optional." }
       }
     }
   }
