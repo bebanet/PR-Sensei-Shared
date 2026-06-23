@@ -40,7 +40,7 @@ This writes `design/tokens.h` (firmware) and `design/tokens.css` (app). The gene
 
 ## How consumers use this
 
-- **Firmware** (Trident, View 7 / P4, roller mat): add this repo as a git submodule, `#include` `design/tokens.h`, and serialize telemetry to `contracts/telemetry.v1.schema.json`. Replace local color `#define`s with the `AS_COL_*` names.
+- **Firmware** (Trident, View 7 / P4, roller mat): add this repo as a git submodule, `#include` `design/tokens.h`, and serialize telemetry to `contracts/telemetry.v1.schema.json`. Replace local color `#define`s with the `AS_COL_*` names. **Display devices link the `components/as_core` component** — it implements the `telemetry.v1` uplink + `account.v1` downlink + pairing/identity for you; you inject net + telemetry sources + device_type through its seams (see `components/as_core/README.md`).
 - **App**: consume `contracts/telemetry.v1.schema.json` and validate every inbound MQTT payload against it at the ingest boundary (reject off-contract messages, do not write them to `readings`). Import `design/tokens.css` into the theme.
 
 ## Versioning rule
