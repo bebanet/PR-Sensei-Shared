@@ -1,0 +1,7 @@
+# Device/deployment-specific — provided per-device, NEVER committed to the shared
+# core. Each device drops its own AWS IoT credentials + cloud_secrets.h here (copy
+# cloud_secrets.h.example). A future Fleet-Provisioning flow moves these to NVS.
+aws_device_cert.pem
+aws_private_key.pem
+aws_root_ca.pem
+cloud_secrets.h
