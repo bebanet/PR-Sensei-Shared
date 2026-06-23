@@ -21,19 +21,25 @@ pr_contract   schema.h · pr_espnow_wire.h          the wire/data contract
 pr_data       registry · history · thresholds      device-independent state + logic
 pr_ui         theme tokens + widgets               gauge · stat card · checklist · tile · sparkline
 pr_sim        fictive-tank simulator               shared demo/dev data source
-pr_net*       apex · hydros · esp-hosted glue       transports (later)
+as_core       mqtt/tls · telemetry.v1 · account.v1  AquaSensei cloud connection (device-agnostic, seam-injected)
+pr_net*       apex · hydros · esp-hosted glue       LAN/local transports (later)
 ```
 
 Dependency direction (no cycles):
-`pr_ui` → `pr_contract`; `pr_data` → `pr_contract`; device app → `pr_ui` + `pr_data` (+ `pr_sim` for demos).
+`pr_ui` → `pr_contract`; `pr_data` → `pr_contract`; `as_core` → **ESP-IDF only**
+(no shared component — the device shell injects net + telemetry sources +
+device_type through seams); device app → `pr_ui` + `pr_data` + `as_core`
+(+ `pr_sim` for demos).
 
 **What stays in the device repo (the "face"):** the panel/touch driver, the
 exact palette tuning (IPS vs OLED), the screen layout, the per-layout projection
 adapter, and `main`.
 
-> Migration status: `pr_contract` is live (wraps `include/`). `pr_data` / `pr_ui`
-> / `pr_sim` currently live inside `PR-Desktop-Display-P4` and are lifted here as
-> they stabilise — see each component's README and §6.
+> Migration status: `pr_contract` is live (wraps `include/`). `as_core` is lifted
+> and live — self-contained (ESP-IDF only), verified on the P4 (telemetry +
+> account.v1, 15-min soak clean); on branch `feat/as-core`, PR → `main` pending.
+> `pr_data` / `pr_ui` / `pr_sim` currently live inside `PR-Desktop-Display-P4`
+> and are lifted here as they stabilise — see each component's README and §6.
 
 ---
 
@@ -88,7 +94,7 @@ project(my_device)
 
 Then a device component just declares what it needs:
 ```cmake
-idf_component_register(SRCS "main.c" INCLUDE_DIRS "." REQUIRES pr_ui pr_data pr_contract)
+idf_component_register(SRCS "main.c" INCLUDE_DIRS "." REQUIRES pr_ui pr_data pr_contract as_core)
 ```
 
 **Alternative: component-manager git dependency** (cleaner semver, no submodule) —
@@ -119,8 +125,8 @@ dependencies:
 
 | Device | Chip | Display | Consumes |
 |--------|------|---------|----------|
-| Desktop Display 7″ | ESP32-P4 | EK79007 MIPI-DSI 1024×600 (IPS) | pr_contract · pr_data · pr_ui (+ pr_sim) |
-| Round display 1.75″ | TBD (likely ESP32-S3) | AMOLED round, QSPI | pr_contract · pr_data · pr_ui (own round layout + OLED palette) |
+| Desktop Display 7″ | ESP32-P4 | EK79007 MIPI-DSI 1024×600 (IPS) | pr_contract · pr_data · pr_ui · as_core (+ pr_sim) |
+| Round display 1.75″ | ESP32 (existing standalone, ESP-IDF) | AMOLED round, QSPI | pr_ui · as_core (own round layout + OLED palette; display-only — being converted to AquaSensei) |
 | Sensor devices (roller mat, ATO, doser…) | ESP32 / S3 / C6 | none | pr_contract (produce `DeviceState`, send over ESP-NOW) |
 
 ---
