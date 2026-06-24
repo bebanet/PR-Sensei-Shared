@@ -1,0 +1,4 @@
+version: "1.0.0"
+description: "Device-agnostic AquaSensei connection core — MQTT/TLS uplink (telemetry.v1) + downlink (account.v1) + identity + claim URL; device specifics injected via seams"
+dependencies:
+  idf: ">=5.3.0"
