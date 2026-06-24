@@ -40,6 +40,9 @@
 #ifndef PR_CLOUD_CLIENTID
 #  define PR_CLOUD_CLIENTID ""
 #endif
+#ifndef PR_CLOUD_PROVISION_TEMPLATE
+#  define PR_CLOUD_PROVISION_TEMPLATE ""   /* set => Fleet Provisioning by Claim on first boot */
+#endif
 
 static const char *TAG = "pr_cloud";
 
@@ -70,6 +73,22 @@ static char s_client_id[40] = "";        /* "pr-<12hex>" or thing-name override 
 static const pr_cloud_telemetry_provider_t *s_tp = NULL;
 static const pr_cloud_net_provider_t       *s_np = NULL;
 static char s_device_type[16] = "";      /* telemetry.device_type slug; shell-set */
+
+/* --- Fleet Provisioning by Claim (gated on a non-empty PR_CLOUD_PROVISION_TEMPLATE) -
+ * When a template is set AND no device cert is stored in NVS, the embedded cert/key
+ * are treated as a CLAIM cert: on first connect the device asks AWS for its own
+ * unique cert, registers it via the template, stores it in NVS, and reconnects with
+ * it. No template (e.g. the View 7) => the embedded cert is used directly as the
+ * device cert (unchanged behaviour). */
+static char s_prov_template[64] = "";
+static EXT_RAM_BSS_ATTR char s_dev_cert[2048];   /* provisioned device cert (PEM, NVS-backed)   */
+static EXT_RAM_BSS_ATTR char s_dev_key[2048];    /* provisioned device key  (PEM, NVS-backed)   */
+static EXT_RAM_BSS_ATTR char s_prov_token[2048]; /* certificateOwnershipToken from create-keys  */
+static bool    s_have_dev    = false;   /* a provisioned device cert is loaded -> use it        */
+static int     s_prov_phase  = 0;       /* 0 idle, 1 awaiting create-cert, 2 awaiting register  */
+static bool    s_prov_done   = false;   /* success -> cloud_task reconnects with the device cert*/
+static bool    s_prov_retry  = false;   /* failure -> cloud_task tears down + backs off         */
+static int64_t s_prov_next_us = 0;      /* don't re-attempt provisioning before this time       */
 
 /* status fields: written by the cloud/MQTT-event tasks, read by the UI push.
    plain (not volatile) — cross-task reads are benign status, and the
@@ -111,7 +130,7 @@ static pr_cloud_state_cb_t s_state_cb = NULL;
 static EXT_RAM_BSS_ATTR char s_rx[PR_CLOUD_RX_MAX];
 static int  s_rx_total    = 0;     /* total_data_len of the in-flight message, 0 = idle */
 static bool s_rx_oversize = false;
-static bool s_rx_is_account = false; /* the in-flight message is on the account topic */
+static int  s_rx_kind = 0;  /* in-flight topic: 0 other,1 account,2/3 create acc/rej,4/5 provision acc/rej */
 static EXT_RAM_BSS_ATTR pr_cloud_state_t s_state;   /* filled per message, passed to the cb */
 
 /* ---- config (NVS, seeded from gitignored cloud_secrets.h) ---------------- */
@@ -122,11 +141,13 @@ static void load_config(void) {
         n = sizeof s_endpoint;  nvs_get_str(h, "endpoint", s_endpoint,  &n);
         n = sizeof s_account;   nvs_get_str(h, "account",  s_account,   &n);
         n = sizeof s_client_id; nvs_get_str(h, "clientid", s_client_id, &n);
+        n = sizeof s_prov_template; nvs_get_str(h, "provtpl", s_prov_template, &n);
         nvs_close(h);
     }
     if (!s_endpoint[0]  && PR_CLOUD_ENDPOINT[0])  strncpy(s_endpoint,  PR_CLOUD_ENDPOINT,  sizeof s_endpoint  - 1);
     if (!s_account[0])                            strncpy(s_account,   PR_CLOUD_ACCOUNT[0] ? PR_CLOUD_ACCOUNT : "dev", sizeof s_account - 1);
     if (!s_client_id[0] && PR_CLOUD_CLIENTID[0])  strncpy(s_client_id, PR_CLOUD_CLIENTID, sizeof s_client_id - 1);
+    if (!s_prov_template[0] && PR_CLOUD_PROVISION_TEMPLATE[0]) strncpy(s_prov_template, PR_CLOUD_PROVISION_TEMPLATE, sizeof s_prov_template - 1);
 }
 
 void pr_cloud_save_config(const char *endpoint, const char *account, const char *client_id) {
@@ -471,12 +492,106 @@ static void sub_account(void) {
     ESP_LOGI(TAG, "subscribed account: %s", topic);
 }
 
+/* ---- Fleet Provisioning by Claim ----------------------------------------- */
+/* Bump to force a one-time re-provision across all units (e.g. after changing the
+   Thing-naming scheme): a stored generation != this clears the saved device cert. */
+#define PR_PROV_GEN 2
+/* Load a previously provisioned device cert/key from NVS (stored as strings). */
+static void prov_load_nvs(void) {
+    uint32_t gen = 0;
+    nvs_get_u32_("provgen", &gen);
+    if (gen != PR_PROV_GEN) {           /* provisioning scheme changed -> drop old cert, re-provision once */
+        nvs_handle_t h;
+        if (nvs_open(PR_CLOUD_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_erase_key(h, "devcert");
+            nvs_erase_key(h, "devkey");
+            nvs_set_u32(h, "provgen", PR_PROV_GEN);
+            nvs_commit(h); nvs_close(h);
+        }
+        ESP_LOGW(TAG, "provisioning generation %u != %u — cleared device cert, will re-provision",
+                 (unsigned)gen, PR_PROV_GEN);
+        return;                          /* s_have_dev stays false -> provision with the claim cert */
+    }
+    if (nvs_get_str_("devcert", s_dev_cert, sizeof s_dev_cert) &&
+        nvs_get_str_("devkey",  s_dev_key,  sizeof s_dev_key)) {
+        s_have_dev = true;
+        ESP_LOGI(TAG, "device certificate loaded from NVS (%u B) — skip provisioning",
+                 (unsigned)strlen(s_dev_cert));
+    }
+}
+static void prov_fail(const char *why) {
+    ESP_LOGE(TAG, "provisioning failed: %s", why);
+    snprintf(s_acct_detail, sizeof s_acct_detail, "provision: %.32s", why);
+    snprintf(s_status, sizeof s_status, "Provisioning failed");
+    s_prov_phase = 0;
+    s_prov_retry = true;       /* cloud_task tears down + backs off, then retries the claim */
+}
+/* Step 1: ask AWS IoT for a fresh keypair + certificate (CreateKeysAndCertificate). */
+static void prov_begin(void) {
+    esp_mqtt_client_subscribe(s_client, "$aws/certificates/create/json/accepted", 1);
+    esp_mqtt_client_subscribe(s_client, "$aws/certificates/create/json/rejected", 1);
+    esp_mqtt_client_publish(s_client, "$aws/certificates/create/json", "", 0, 1, 0);
+    s_prov_phase = 1;
+    snprintf(s_status, sizeof s_status, "Provisioning (1/2)");
+    ESP_LOGI(TAG, "fleet provisioning: requesting a device certificate");
+}
+/* Step 2 (create accepted): stash the new cert/key/token, then RegisterThing. */
+static void prov_handle_create(const char *buf, int len) {
+    cJSON *j = cJSON_ParseWithLength(buf, len);
+    if (!j) { prov_fail("create parse"); return; }
+    const cJSON *pem = cJSON_GetObjectItem(j, "certificatePem");
+    const cJSON *key = cJSON_GetObjectItem(j, "privateKey");
+    const cJSON *tok = cJSON_GetObjectItem(j, "certificateOwnershipToken");
+    if (!cJSON_IsString(pem) || !cJSON_IsString(key) || !cJSON_IsString(tok)) {
+        cJSON_Delete(j); prov_fail("create fields"); return;
+    }
+    snprintf(s_dev_cert,   sizeof s_dev_cert,   "%s", pem->valuestring);
+    snprintf(s_dev_key,    sizeof s_dev_key,    "%s", key->valuestring);
+    snprintf(s_prov_token, sizeof s_prov_token, "%s", tok->valuestring);
+    cJSON_Delete(j);
+
+    char base[160], t[200];
+    snprintf(base, sizeof base, "$aws/provisioning-templates/%s/provision/json", s_prov_template);
+    snprintf(t, sizeof t, "%s/accepted", base); esp_mqtt_client_subscribe(s_client, t, 1);
+    snprintf(t, sizeof t, "%s/rejected", base); esp_mqtt_client_subscribe(s_client, t, 1);
+
+    /* Send the FULL clientId ("pr-<mac>") as SerialNumber so the template names the
+       Thing identically to the clientId and the topic's {display} segment — the
+       device policy scopes every topic to ${iot:Connection.Thing.ThingName}. */
+    const char *serial = s_client_id;
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "certificateOwnershipToken", s_prov_token);
+    cJSON *params = cJSON_AddObjectToObject(p, "parameters");
+    cJSON_AddStringToObject(params, "SerialNumber", serial);
+    cJSON_AddStringToObject(params, "DeviceType",  s_device_type);
+    char *body = cJSON_PrintUnformatted(p);
+    cJSON_Delete(p);
+    if (body) { esp_mqtt_client_publish(s_client, base, body, 0, 1, 0); cJSON_free(body); }
+    s_prov_phase = 2;
+    snprintf(s_status, sizeof s_status, "Provisioning (2/2)");
+    ESP_LOGI(TAG, "fleet provisioning: registering thing %s (%s)", serial, s_device_type);
+}
+/* Step 3 (register accepted): persist the device cert/key + flag a reconnect. */
+static void prov_handle_provisioned(void) {
+    nvs_set_str_("devcert", s_dev_cert);
+    nvs_set_str_("devkey",  s_dev_key);
+    s_have_dev   = true;
+    s_prov_phase = 0;
+    s_prov_done  = true;       /* cloud_task: drop the claim link, reconnect as the device */
+    snprintf(s_status, sizeof s_status, "Provisioned");
+    ESP_LOGI(TAG, "fleet provisioning DONE — device cert stored, reconnecting as \"%s\"", s_client_id);
+}
+
 static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data) {
     (void)args; (void)base;
     esp_mqtt_event_handle_t e = (esp_mqtt_event_handle_t)data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED: {
         s_connected = true; s_connecting = false; s_last_error[0] = '\0';
+        if (s_prov_template[0] && !s_have_dev) {   /* connected with the CLAIM cert -> self-provision */
+            prov_begin();
+            break;
+        }
         /* account is the ONLY downlink (no cmd topic). Subscribe on EVERY connect:
            MQTT subscriptions don't survive a reconnect, and gating this on a prior
            telemetry publish meant a device with a server record but no live Apex
@@ -494,7 +609,8 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data) {
     }
     case MQTT_EVENT_DISCONNECTED:
         s_connected = false; s_connecting = true;
-        s_rx_total = 0; s_rx_oversize = false; s_rx_is_account = false;  /* drop any partial msg */
+        s_rx_total = 0; s_rx_oversize = false; s_rx_kind = 0;  /* drop any partial msg */
+        s_prov_phase = 0;                                     /* a dropped link restarts provisioning */
         if (s_acct_subd) {   /* attribute a quick drop after subscribing to the subscribe */
             if (esp_timer_get_time() - s_conn_us < ACCT_SHORT_US) {
                 if (++s_acct_fails >= ACCT_BACKOFF_N && !s_acct_backoff) {
@@ -517,22 +633,34 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data) {
            decoder. Only the FIRST fragment (offset 0) carries the topic, so
            classify there. (account is the only topic we subscribe to.) */
         if (e->current_data_offset == 0) {
-            s_rx_total      = e->total_data_len;
-            s_rx_oversize   = (e->total_data_len > (int)sizeof(s_rx) - 1);
-            s_rx_is_account = topic_ends_with(e->topic, e->topic_len, "/account");
+            const char *tp = e->topic; int tl = e->topic_len;
+            s_rx_total    = e->total_data_len;
+            s_rx_oversize = (e->total_data_len > (int)sizeof(s_rx) - 1);
+            s_rx_kind = topic_ends_with(tp, tl, "/account")                            ? 1
+                      : topic_ends_with(tp, tl, "/certificates/create/json/accepted")  ? 2
+                      : topic_ends_with(tp, tl, "/certificates/create/json/rejected")  ? 3
+                      : topic_ends_with(tp, tl, "/provision/json/accepted")            ? 4
+                      : topic_ends_with(tp, tl, "/provision/json/rejected")            ? 5 : 0;
         }
         if (!s_rx_oversize && s_rx_total > 0 &&
             e->current_data_offset + e->data_len <= (int)sizeof(s_rx) - 1)
             memcpy(s_rx + e->current_data_offset, e->data, e->data_len);
 
         if (s_rx_total > 0 && e->current_data_offset + e->data_len >= s_rx_total) {
-            if (s_rx_oversize)
+            if (s_rx_oversize) {
                 ESP_LOGW(TAG, "inbound %d B > %d cap, dropped", s_rx_total, (int)sizeof(s_rx) - 1);
-            else if (s_rx_is_account) {
+            } else {
                 s_rx[s_rx_total] = '\0';
-                handle_account(s_rx, s_rx_total);
+                switch (s_rx_kind) {
+                case 1: handle_account(s_rx, s_rx_total); break;
+                case 2: prov_handle_create(s_rx, s_rx_total); break;
+                case 4: prov_handle_provisioned();           break;
+                case 3: ESP_LOGE(TAG, "create-cert rejected: %.200s", s_rx); prov_fail("create rejected"); break;
+                case 5: ESP_LOGE(TAG, "register rejected: %.200s",   s_rx); prov_fail("register rejected"); break;
+                default: break;
+                }
             }
-            s_rx_total = 0; s_rx_oversize = false; s_rx_is_account = false;
+            s_rx_total = 0; s_rx_oversize = false; s_rx_kind = 0;
         }
         break;
     }
@@ -561,8 +689,10 @@ static void mqtt_connect(void) {
     cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;     /* SNI on by default */
     cfg.broker.verification.certificate        = (const char *)aws_root_ca_pem_start;     /* server CA */
     cfg.credentials.client_id                  = s_client_id;
-    cfg.credentials.authentication.certificate = (const char *)aws_device_cert_pem_start; /* client cert */
-    cfg.credentials.authentication.key         = (const char *)aws_private_key_pem_start; /* client key  */
+    /* A provisioned device cert in NVS wins; otherwise the embedded cert — which is
+       the CLAIM cert when a provisioning template is set, or the device cert. */
+    cfg.credentials.authentication.certificate = s_have_dev ? s_dev_cert : (const char *)aws_device_cert_pem_start;
+    cfg.credentials.authentication.key         = s_have_dev ? s_dev_key  : (const char *)aws_private_key_pem_start;
     cfg.session.keepalive = 60;
 
     s_client = esp_mqtt_client_init(&cfg);
@@ -640,8 +770,28 @@ static void cloud_task(void *arg) {
             continue;
         }
 
+        /* fleet provisioning lifecycle: drop the claim link + reconnect as the
+           device on success; tear down + back off 30 s on failure. */
+        if (s_prov_done)  { s_prov_done = false;
+            if (s_client) { esp_mqtt_client_destroy(s_client); s_client = NULL; }
+            s_connected = false; s_connecting = false; }
+        if (s_prov_retry) { s_prov_retry = false;
+            if (s_client) { esp_mqtt_client_destroy(s_client); s_client = NULL; }
+            s_connected = false; s_connecting = false;
+            s_prov_next_us = esp_timer_get_time() + 30LL * 1000000; }
+        if (s_prov_next_us) {
+            if (esp_timer_get_time() < s_prov_next_us) {
+                snprintf(s_status, sizeof s_status, "Provisioning retry soon"); continue;
+            }
+            s_prov_next_us = 0;
+        }
+
         if (!s_client) mqtt_connect();
         if (!s_connected) { snprintf(s_status, sizeof s_status, "Connecting..."); continue; }
+        if (s_prov_template[0] && !s_have_dev) {   /* claim connection: provisioning runs via MQTT events */
+            snprintf(s_status, sizeof s_status, "Provisioning...");
+            continue;
+        }
         s_status[0] = '\0';                    /* connected — no idle reason */
 
         /* While backed off (telemetry-only), periodically re-try the /account
@@ -686,6 +836,7 @@ void pr_cloud_start(void) {
     if (s_started) return;
     s_started = true;
     load_config();
+    prov_load_nvs();        /* if a device cert is already stored, skip provisioning */
     xTaskCreatePinnedToCore(cloud_task, "pr_cloud", 8192, NULL, 3, NULL, 0);
 }
 
